@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>期限结构曲线查询</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', Arial, sans-serif; background: #f5f7fa; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px; text-align: center; }
+        .header h1 { font-size: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; padding: 15px; }
+        .search-box { background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .search-box label { margin-right: 10px; }
+        .search-box select, .search-box input { padding: 8px; border: 1px solid #ddd; border-radius: 4px; margin-right: 10px; }
+        .search-box button { padding: 8px 20px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .search-box button:hover { background: #5a6fd6; }
+        .chart-box { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .info { background: #f8f9fa; padding: 10px; border-radius: 4px; margin-top: 15px; }
+        .info p { margin: 5px 0; font-size: 14px; }
+        .info span { font-weight: bold; }
+        .positive { color: #67c23a; }
+        .negative { color: #f56c6c; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background: #f5f7fa; }
+        tr:nth-child(even) { background: #fafafa; }
+        .loading { text-align: center; padding: 50px; color: #666; }
+        .hint { color: #999; font-size: 12px; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>收益率期限结构曲线查询</h1>
+            <p style="font-size: 12px; margin-top: 5px; opacity: 0.8;">数据内嵌，直接打开即可使用 | 需联网加载图表库</p>
+        </div>
+
+        <div class="container">
+            <div class="search-box">
+                <label>日期:</label>
+                <select v-model="selectedDate">
+                    <option v-for="d in availableDates" :key="d" :value="d">{{ d }}</option>
+                </select>
+
+                <label>类型:</label>
+                <select v-model="bondType">
+                    <option value="normal">普通债</option>
+                    <option value="perpetual">永续债</option>
+                </select>
+
+                <label>发行人:</label>
+                <input type="text" v-model="searchText" placeholder="输入发行人名称" style="width: 200px;" @keyup.enter="search">
+
+                <button @click="search">查询</button>
+                <button @click="clear" style="background: #999;">清空</button>
+
+                <div class="hint">提示: 输入发行人名称关键词搜索，如"开封"、"中铁"、"城投"</div>
+            </div>
+
+            <div v-if="loading" class="loading">加载中...</div>
+
+            <div v-if="chartData && !loading" class="chart-box">
+                <div id="chart" style="width: 100%; height: 400px;"></div>
+
+                <div class="info">
+                    <p><span>发行人:</span> {{ chartData.issuer_name }}</p>
+                    <p><span>债券类型:</span> {{ chartData.bond_type }} | <span>拟合模型:</span> {{ chartData.model_type }} | <span>样本数:</span> {{ chartData.bond_count }}只</p>
+                    <p><span>拟合优度R2:</span> {{ (chartData.r_squared * 100).toFixed(1) }}% |
+                       <span>斜率:</span> <span :class="chartData.slope_total >= 0 ? 'positive' : 'negative'">{{ chartData.slope_total.toFixed(1) }} bp</span> |
+                       <span>期限范围:</span> {{ chartData.tenor_min?.toFixed(2) || '-' }} - {{ chartData.tenor_max?.toFixed(2) || '-' }}年</p>
+                </div>
+
+                <table v-if="chartData.bonds && chartData.bonds.length">
+                    <thead>
+                        <tr><th>债券简称</th><th>债券代码</th><th>剩余期限(年)</th><th>收益率(%)</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr v-for="b in chartData.bonds" :key="b.bond_code">
+                            <td>{{ b.bond_name }}</td>
+                            <td>{{ b.bond_code }}</td>
+                            <td>{{ b.remain_years.toFixed(2) }}</td>
+                            <td>{{ b.ytm.toFixed(2) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div v-if="!chartData && !loading && searched" style="text-align: center; padding: 50px; color: #999;">
+                未找到 "{{ searchText }}" 的数据，请检查名称是否正确
+            </div>
+
+            <div v-if="!chartData && !loading && !searched" style="text-align: center; padding: 50px; color: #999;">
+                请输入发行人名称查询期限结构曲线
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // 数据将在下面注入
+    const ALL_DATA = __DATA__;
+
+    const { createApp, ref, onMounted, nextTick } = Vue;
+
+    createApp({
+        setup() {
+            const selectedDate = ref('2026-03-06');
+            const bondType = ref('normal');
+            const searchText = ref('');
+            const chartData = ref(null);
+            const loading = ref(false);
+            const searched = ref(false);
+            const availableDates = ref(Object.keys(ALL_DATA));
+            let chart = null;
+
+            const search = async () => {
+                if (!searchText.value.trim()) {
+                    alert('请输入发行人名称');
+                    return;
+                }
+                loading.value = true;
+                searched.value = true;
+
+                try {
+                    const list = ALL_DATA[selectedDate.value]?.[bondType.value] || [];
+                    const keyword = searchText.value.trim();
+                    const found = list.filter(item => item.issuer_name && item.issuer_name.includes(keyword));
+
+                    if (found.length > 0) {
+                        chartData.value = found[0];
+                        await nextTick();
+                        renderChart();
+                    } else {
+                        chartData.value = null;
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('查询出错: ' + e.message);
+                } finally {
+                    loading.value = false;
+                }
+            };
+
+            const clear = () => {
+                searchText.value = '';
+                chartData.value = null;
+                searched.value = false;
+            };
+
+            const renderChart = () => {
+                try {
+                    const el = document.getElementById('chart');
+                    if (!el) return;
+
+                    if (!chart) {
+                        chart = echarts.init(el);
+                    }
+
+                    const bonds = chartData.value.bonds || [];
+                    if (bonds.length === 0) return;
+
+                    const sorted = [...bonds].sort((a, b) => a.remain_years - b.remain_years);
+                    const data = sorted.map(b => [b.remain_years, b.ytm, b.bond_name]);
+
+                    const xMax = Math.max(...sorted.map(b => b.remain_years));
+
+                    chart.setOption({
+                        title: { text: chartData.value.issuer_name, left: 'center', textStyle: { fontSize: 14 } },
+                        tooltip: {
+                            trigger: 'item',
+                            formatter: function(p) {
+                                return p.data[2] + '<br/>期限: ' + p.data[0].toFixed(2) + '年<br/>收益率: ' + p.data[1].toFixed(2) + '%';
+                            }
+                        },
+                        grid: { left: '10%', right: '5%', bottom: '15%', top: '20%' },
+                        xAxis: { type: 'value', name: '期限(年)', nameLocation: 'middle', nameGap: 25, min: 0, max: Math.max(15, Math.ceil(xMax + 1)) },
+                        yAxis: { type: 'value', name: '收益率(%)', nameLocation: 'middle', nameGap: 35 },
+                        series: [{
+                            type: 'scatter',
+                            data: data,
+                            symbolSize: 12,
+                            itemStyle: { color: '#5470c6' },
+                            label: {
+                                show: true,
+                                formatter: function(p) { return p.data[2].substring(0, 6); },
+                                position: 'top',
+                                fontSize: 9
+                            }
+                        }]
+                    }, true);
+                } catch (e) {
+                    console.error('图表渲染错误:', e);
+                }
+            };
+
+            onMounted(() => {
+                window.addEventListener('resize', () => {
+                    if (chart) chart.resize();
+                });
+            });
+
+            return { selectedDate, bondType, searchText, chartData, loading, searched, availableDates, search, clear };
+        }
+    }).mount('#app');
+    </script>
+</body>
+</html>

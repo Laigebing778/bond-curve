@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Data files (large)
+# 保留HTML但排除大型JSON
+data/*.json
+!data/期限结构曲线查询.html
+
+# Keep small files
+!data/.gitkeep

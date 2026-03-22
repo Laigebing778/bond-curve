@@ -1,0 +1,22 @@
+# 债券收益率曲线分析平台 - Python依赖
+
+# Web框架
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# 数据处理
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.11.0
+openpyxl>=3.1.0
+python-calamine>=0.1.0
+
+# HTTP客户端
+httpx>=0.24.0
+requests>=2.31.0
+
+# 数据验证
+pydantic>=2.0.0
+
+# Choice API (本地安装，无需pip)
+# 路径: D:\choice\EMQuantAPI_Python\EMQuantAPI_Python\python3

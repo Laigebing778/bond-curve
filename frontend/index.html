@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>债券收益率曲线分析平台</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/element-plus"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f7fa; min-height: 100vh; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 28px; margin-bottom: 10px; }
+        .header p { opacity: 0.8; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .controls { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+        .stats { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); display: flex; gap: 30px; justify-content: center; flex-wrap: wrap; }
+        .stat-item { text-align: center; min-width: 120px; }
+        .stat-value { font-size: 28px; font-weight: bold; color: #667eea; }
+        .stat-label { color: #909399; margin-top: 5px; font-size: 14px; }
+        .table-container { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+        .positive { color: #67c23a; font-weight: bold; }
+        .negative { color: #f56c6c; font-weight: bold; }
+        .el-table { font-size: 13px; }
+        .el-table th { background: #f5f7fa !important; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>债券收益率曲线分析平台</h1>
+            <p>期限结构曲线拟合 · 斜率特征分析 · 普通债/永续债分类</p>
+        </div>
+
+        <div class="container">
+            <div class="controls">
+                <el-date-picker v-model="selectedDate" type="date" placeholder="选择日期"
+                    format="YYYY-MM-DD" value-format="YYYY-MM-DD" style="width: 180px"
+                    :disabled-date="disabledDates"></el-date-picker>
+
+                <el-button type="primary" @click="loadData" :loading="loading">
+                    <span v-if="!loading">查询</span>
+                </el-button>
+
+                <el-button type="success" @click="updateData" :loading="updating">
+                    更新今日数据
+                </el-button>
+
+                <el-button type="warning" @click="exportExcel" :disabled="!hasData">
+                    导出Excel
+                </el-button>
+
+                <el-tag v-if="lastUpdate" type="info" size="small">{{ lastUpdate }}</el-tag>
+            </div>
+
+            <div class="stats" v-if="hasData">
+                <div class="stat-item">
+                    <div class="stat-value">{{ stats.totalIssuers }}</div>
+                    <div class="stat-label">发行人总数</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ stats.normalCount }}</div>
+                    <div class="stat-label">普通债</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ stats.perpetualCount }}</div>
+                    <div class="stat-label">永续债</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{{ stats.avgSlope }} bp</div>
+                    <div class="stat-label">平均斜率</div>
+                </div>
+            </div>
+
+            <div class="table-container" v-if="hasData">
+                <el-tabs v-model="activeTab">
+                    <el-tab-pane label="普通债" name="normal">
+                        <el-table :data="normalData" stripe border height="500" @sort-change="handleSort">
+                            <el-table-column prop="issuer_name" label="发行人" min-width="180" fixed></el-table-column>
+                            <el-table-column prop="bond_count" label="债券数" width="80" sortable></el-table-column>
+                            <el-table-column prop="model_type" label="模型" width="100"></el-table-column>
+                            <el-table-column prop="slope_total" label="斜率(bp)" width="100" sortable>
+                                <template #default="scope">
+                                    <span :class="scope.row.slope_total >= 0 ? 'positive' : 'negative'">
+                                        {{ scope.row.slope_total?.toFixed(1) || '-' }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="r_squared" label="R²" width="80" sortable>
+                                <template #default="scope">{{ scope.row.r_squared ? (scope.row.r_squared * 100).toFixed(1) + '%' : '-' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="tenor_range" label="期限范围" width="100">
+                                <template #default="scope">
+                                    <span v-if="scope.row.tenor_min && scope.row.tenor_max">
+                                        {{ scope.row.tenor_min.toFixed(1) }}-{{ scope.row.tenor_max.toFixed(1) }}Y
+                                    </span>
+                                    <span v-else>-</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="yield_1y" label="1Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_1y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_3y" label="3Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_3y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_5y" label="5Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_5y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_10y" label="10Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_10y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+                    <el-tab-pane label="永续债" name="perpetual">
+                        <el-table :data="perpetualData" stripe border height="500">
+                            <el-table-column prop="issuer_name" label="发行人" min-width="180" fixed></el-table-column>
+                            <el-table-column prop="bond_count" label="债券数" width="80" sortable></el-table-column>
+                            <el-table-column prop="model_type" label="模型" width="100"></el-table-column>
+                            <el-table-column prop="slope_total" label="斜率(bp)" width="100" sortable>
+                                <template #default="scope">
+                                    <span :class="scope.row.slope_total >= 0 ? 'positive' : 'negative'">
+                                        {{ scope.row.slope_total?.toFixed(1) || '-' }}
+                                    </span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="r_squared" label="R²" width="80" sortable>
+                                <template #default="scope">{{ scope.row.r_squared ? (scope.row.r_squared * 100).toFixed(1) + '%' : '-' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="tenor_range" label="期限范围" width="100">
+                                <template #default="scope">
+                                    <span v-if="scope.row.tenor_min && scope.row.tenor_max">
+                                        {{ scope.row.tenor_min.toFixed(1) }}-{{ scope.row.tenor_max.toFixed(1) }}Y
+                                    </span>
+                                    <span v-else>-</span>
+                                </template>
+                            </el-table-column>
+                            <el-table-column prop="yield_1y" label="1Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_1y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_3y" label="3Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_3y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_5y" label="5Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_5y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                            <el-table-column prop="yield_10y" label="10Y(%)" width="80">
+                                <template #default="scope">{{ scope.row.yield_10y?.toFixed(2) || 'N/A' }}</template>
+                            </el-table-column>
+                        </el-table>
+                    </el-tab-pane>
+                </el-tabs>
+            </div>
+
+            <el-empty v-if="!hasData && !loading" description="请选择日期查询数据"></el-empty>
+        </div>
+    </div>
+
+    <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+    const { ElMessage } = ElementPlus;
+
+    createApp({
+        setup() {
+            const loading = ref(false);
+            const updating = ref(false);
+            const selectedDate = ref(null);
+            const activeTab = ref('normal');
+            const availableDates = ref([]);
+            const analysisData = ref(null);
+            const lastUpdate = ref(null);
+
+            const hasData = computed(() => analysisData.value && (analysisData.value.normal?.length > 0 || analysisData.value.perpetual?.length > 0));
+            const normalData = computed(() => analysisData.value?.normal || []);
+            const perpetualData = computed(() => analysisData.value?.perpetual || []);
+            const stats = computed(() => {
+                if (!hasData.value) return {};
+                const normal = normalData.value, perpetual = perpetualData.value, all = [...normal, ...perpetual];
+                return {
+                    totalIssuers: all.length,
+                    normalCount: normal.length,
+                    perpetualCount: perpetual.length,
+                    avgSlope: all.length > 0 ? (all.reduce((s, i) => s + (i.slope_total || 0), 0) / all.length).toFixed(1) : 0
+                };
+            });
+
+            const loadAvailableDates = async () => {
+                try {
+                    const res = await axios.get('/api/dates');
+                    availableDates.value = res.data.dates || [];
+                    if (availableDates.value.length > 0) selectedDate.value = availableDates.value[0];
+                } catch (e) { console.error(e); }
+            };
+
+            const loadData = async () => {
+                if (!selectedDate.value) { ElMessage.warning('请选择日期'); return; }
+                loading.value = true;
+                try {
+                    const res = await axios.get(`/api/analysis/${selectedDate.value}`);
+                    analysisData.value = res.data;
+                    lastUpdate.value = new Date().toLocaleString();
+                    ElMessage.success('数据加载成功');
+                } catch (e) {
+                    if (e.response?.status === 404) ElMessage.warning('该日期暂无数据');
+                    else ElMessage.error('加载失败: ' + (e.response?.data?.detail || e.message));
+                } finally { loading.value = false; }
+            };
+
+            const updateData = async () => {
+                updating.value = true;
+                try {
+                    const res = await axios.post('/api/update', { date: selectedDate.value });
+                    if (res.data.success) {
+                        ElMessage.success(res.data.message);
+                        await loadAvailableDates();
+                        await loadData();
+                    } else ElMessage.error(res.data.message);
+                } catch (e) { ElMessage.error('更新失败'); }
+                finally { updating.value = false; }
+            };
+
+            const exportExcel = () => {
+                if (!selectedDate.value) return;
+                window.open(`/api/export/${selectedDate.value}`, '_blank');
+            };
+
+            const disabledDates = (time) => time.getTime() > Date.now();
+            const handleSort = ({ prop, order }) => {};
+
+            onMounted(() => { loadAvailableDates(); });
+
+            return { loading, updating, selectedDate, activeTab, availableDates, analysisData, lastUpdate,
+                hasData, normalData, perpetualData, stats, loadData, updateData, exportExcel, disabledDates, handleSort };
+        }
+    }).use(ElementPlus).mount('#app');
+    </script>
+</body>
+</html>

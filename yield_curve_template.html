@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>期限结构曲线查询</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'SimSun','Microsoft YaHei',Arial,sans-serif;background:#f5f7fa}
+.header{background:linear-gradient(135deg,#8B9D83 0%,#A8A39D 100%);color:white;padding:20px;text-align:center}
+.header h1{font-family:'SimSun','Microsoft YaHei',sans-serif;font-size:22px;margin-bottom:5px}
+.header p{font-family:'SimSun','Microsoft YaHei',sans-serif;font-size:12px;opacity:0.85}
+.container{max-width:1100px;margin:0 auto;padding:20px}
+.search-box{background:white;padding:20px;border-radius:10px;margin-bottom:20px;box-shadow:0 2px 12px rgba(0,0,0,0.08)}
+.search-box label{margin-right:10px;font-size:14px;color:#333}
+.search-box select,.search-box input{padding:8px 12px;border:1px solid #dcdfe6;border-radius:6px;margin-right:12px;font-size:14px}
+.search-box button{padding:8px 20px;background:#8B9D83;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px}
+.search-box button:hover{background:#7A8D73}
+.search-box button:disabled{background:#c0c4cc;cursor:not-allowed}
+.hint{color:#909399;font-size:12px;margin-top:12px;padding-top:10px;border-top:1px solid #ebeef5}
+.input-wrapper{display:inline-block;position:relative;vertical-align:middle}
+.autocomplete-list{position:absolute;top:100%;left:0;min-width:300px;background:white;border:1px solid #dcdfe6;border-radius:6px;max-height:200px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.15);margin-top:2px}
+.autocomplete-item{padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center}
+.autocomplete-item:hover{background:#f5f7fa}
+.autocomplete-item:last-child{border-bottom:none}
+.autocomplete-item .issuer-name{font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.autocomplete-item .bond-count{color:#909399;font-size:12px;margin-left:10px;flex-shrink:0}
+.chart-box{background:white;padding:20px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.08)}
+.info-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:15px;margin-top:20px;padding:20px;background:#fafbfc;border-radius:8px}
+.info-item{text-align:center;padding:10px;background:white;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.05)}
+.info-item .label{font-size:12px;color:#909399;margin-bottom:5px}
+.info-item .value{font-size:16px;font-weight:600;color:#303133}
+.info-item .value.positive{color:#B5651D}
+.info-item .value.negative{color:#6B8E6B}
+table{width:100%;border-collapse:collapse;margin-top:20px;font-size:13px}
+th,td{border:1px solid #ebeef5;padding:10px 12px;text-align:left}
+th{background:#fafbfc;font-weight:600;color:#606266}
+tr:nth-child(even){background:#fafbfc}
+tr:hover{background:#f0f2f5}
+.stats-bar{display:flex;gap:20px;justify-content:center;margin-bottom:15px}
+.stat-box{background:white;padding:12px 25px;border-radius:8px;text-align:center;box-shadow:0 1px 4px rgba(0,0,0,0.05)}
+.stat-box .num{font-size:24px;font-weight:700;color:#8B9D83}
+.stat-box .txt{font-size:12px;color:#909399;margin-top:3px}
+</style>
+</head>
+<body>
+<div id="app">
+<div class="header">
+<h1>收益率期限结构曲线查询</h1>
+<p>数据内嵌，直接打开即可使用 | 支持拟合曲线展示</p>
+</div>
+<div class="container">
+<div class="stats-bar">
+<div class="stat-box"><div class="num">{{normalCount}}</div><div class="txt">普通债发行人</div></div>
+<div class="stat-box"><div class="num">{{perpetualCount}}</div><div class="txt">永续债发行人</div></div>
+</div>
+<div class="search-box">
+<label>日期:</label>
+<select v-model="selectedDate"><option v-for="d in dates" :key="d" :value="d">{{d}}</option></select>
+<label>类型:</label>
+<select v-model="bondType"><option value="normal">普通债</option><option value="perpetual">永续债</option></select>
+<label>发行人:</label>
+<span class="input-wrapper">
+<input type="text" v-model="kw" @input="onInput" @keyup.enter="search" @blur="hideSuggestions" placeholder="如：开封、中铁、城投" style="width:180px">
+<div class="autocomplete-list" v-show="showSuggestions && suggestions.length>0">
+<div class="autocomplete-item" v-for="(item,idx) in suggestions" :key="idx" @mousedown.prevent="selectIssuer(item.i)">
+<span class="issuer-name">{{item.i}}</span>
+<span class="bond-count">{{item.c}}只</span>
+</div>
+</div>
+</span>
+<button @click="search" :disabled="loading">查询</button>
+<button @click="clear" style="background:#A8A39D;margin-left:8px">清空</button>
+<div class="hint">输入发行人名称关键词搜索，支持模糊匹配。切换日期/类型后点击查询更新数据。</div>
+</div>
+<div v-if="loading" style="text-align:center;padding:80px;color:#909399;font-size:16px">加载中...</div>
+<div v-if="result && !loading" class="chart-box">
+<div id="chart" style="width:100%;height:450px"></div>
+<div class="info-grid">
+<div class="info-item"><div class="label">发行人</div><div class="value" style="font-size:14px">{{result.i}}</div></div>
+<div class="info-item"><div class="label">债券类型</div><div class="value">{{result.t}}</div></div>
+<div class="info-item"><div class="label">拟合模型</div><div class="value">{{result.m}}</div></div>
+<div class="info-item"><div class="label">样本数量</div><div class="value">{{result.c}}只</div></div>
+<div class="info-item"><div class="label">拟合优度R2</div><div class="value">{{(result.r*100).toFixed(1)}}%</div></div>
+<div class="info-item"><div class="label">整体斜率</div><div class="value" :class="result.s>=0?'positive':'negative'">{{result.s.toFixed(1)}} bp</div></div>
+<div class="info-item"><div class="label">期限范围</div><div class="value">{{result.n.toFixed(2)}} - {{result.x.toFixed(2)}} 年</div></div>
+<div class="info-item"><div class="label">曲线形态</div><div class="value" :class="result.s>=0?'positive':'negative'">{{result.s>=0?'正常上行':'倒挂下行'}}</div></div>
+</div>
+<table v-if="result.b && result.b.length">
+<thead><tr><th>债券简称</th><th>债券代码</th><th>剩余期限(年)</th><th>收益率(%)</th></tr></thead>
+<tbody><tr v-for="b in sortedBonds" :key="b.c"><td>{{b.n}}</td><td>{{b.c}}</td><td>{{b.y.toFixed(2)}}</td><td>{{b.v.toFixed(2)}}</td></tr></tbody>
+</table>
+</div>
+<div v-if="!result && !loading && searched" style="text-align:center;padding:80px;color:#909399"><div style="font-size:16px;margin-bottom:10px">未找到"{{kw}}"的数据</div><div style="font-size:13px">请检查发行人名称是否正确，或尝试切换日期</div></div>
+<div v-if="!result && !loading && !searched" style="text-align:center;padding:80px;color:#909399"><div style="font-size:16px;margin-bottom:10px">请输入发行人名称查询</div><div style="font-size:13px">支持模糊搜索，如输入"开封"查询开封市相关发行人</div></div>
+</div>
+</div>
+<script>
+var DATA=__DATA__;
+Vue.createApp({
+setup:function(){
+var selectedDate=Vue.ref('2026-03-06');
+var bondType=Vue.ref('normal');
+var kw=Vue.ref('');
+var result=Vue.ref(null);
+var loading=Vue.ref(false);
+var searched=Vue.ref(false);
+var dates=Object.keys(DATA);
+var chart=null;
+var showSuggestions=Vue.ref(false);
+var suggestions=Vue.ref([]);
+
+var normalCount=Vue.computed(function(){
+return DATA[selectedDate.value]&&DATA[selectedDate.value].normal?DATA[selectedDate.value].normal.length:0;
+});
+var perpetualCount=Vue.computed(function(){
+return DATA[selectedDate.value]&&DATA[selectedDate.value].perpetual?DATA[selectedDate.value].perpetual.length:0;
+});
+var sortedBonds=Vue.computed(function(){
+if(!result.value||!result.value.b)return[];
+return result.value.b.slice().sort(function(a,b){return a.y-b.y});
+});
+
+function onInput(){
+var keyword=kw.value.trim();
+if(keyword.length>0){
+var list=DATA[selectedDate.value]&&DATA[selectedDate.value][bondType.value]?DATA[selectedDate.value][bondType.value]:[];
+var filtered=list.filter(function(i){return i.i&&i.i.indexOf(keyword)!==-1}).slice(0,10);
+suggestions.value=filtered;
+showSuggestions.value=true;
+}else{
+suggestions.value=[];
+showSuggestions.value=false;
+}
+}
+
+function selectIssuer(name){
+kw.value=name;
+showSuggestions.value=false;
+search();
+}
+
+function hideSuggestions(){
+setTimeout(function(){showSuggestions.value=false},200);
+}
+
+// 监听日期和类型变化，自动刷新数据
+Vue.watch([selectedDate, bondType], function(){
+if(kw.value.trim() && searched.value){
+autoRefresh();
+}
+});
+
+function autoRefresh(){
+loading.value=true;
+try{
+var currentDate=selectedDate.value;
+var currentType=bondType.value;
+var list=DATA[currentDate]&&DATA[currentDate][currentType]?DATA[currentDate][currentType]:[];
+var keyword=kw.value.trim();
+var found=list.filter(function(i){return i.i&&i.i.indexOf(keyword)!==-1});
+if(found.length>0){
+result.value=found[0];
+Vue.nextTick(function(){renderChart()});
+}else{
+result.value=null;
+}
+}catch(e){
+console.error(e);
+}
+loading.value=false;
+}
+
+function search(){
+if(!kw.value.trim()){alert('请输入发行人名称');return}
+loading.value=true;
+searched.value=true;
+showSuggestions.value=false;
+try{
+var currentDate=selectedDate.value;
+var currentType=bondType.value;
+var list=DATA[currentDate]&&DATA[currentDate][currentType]?DATA[currentDate][currentType]:[];
+var keyword=kw.value.trim();
+var found=list.filter(function(i){return i.i&&i.i.indexOf(keyword)!==-1});
+if(found.length>0){
+result.value=found[0];
+Vue.nextTick(function(){renderChart()});
+}else{
+result.value=null;
+}
+}catch(e){
+console.error(e);
+alert('错误:'+e.message);
+}
+loading.value=false;
+}
+
+function clear(){
+kw.value='';
+result.value=null;
+searched.value=false;
+showSuggestions.value=false;
+}
+
+function renderChart(){
+try{
+var el=document.getElementById('chart');
+if(!el)return;
+if(!chart)chart=echarts.init(el);
+var bonds=result.value.b||[];
+if(!bonds||bonds.length===0){
+console.log('无债券数据');
+return;
+}
+bonds=bonds.slice().sort(function(a,b){return a.y-b.y});
+var scatterData=bonds.map(function(b){return{value:[b.y,b.v],name:b.n}});
+var yMin=Math.min.apply(null,bonds.map(function(b){return b.v}));
+var yMax=Math.max.apply(null,bonds.map(function(b){return b.v}));
+var yAxisMin=Math.floor((yMin-0.25)*4)/4;
+var yAxisMax=Math.ceil((yMax+0.25)*4)/4;
+var tenorMin=result.value.n||bonds[0].y;
+var tenorMax=result.value.x||bonds[bonds.length-1].y;
+var curveData=[];
+for(var t=0;t<=10;t+=0.5){
+if(t>=tenorMin&&t<=tenorMax){
+var y=interpolateYield(bonds,t);
+if(y!==null)curveData.push([t,y]);
+}
+}
+var option={
+color:['#7A9E9F','#C9A193'],
+title:{text:result.value.i,subtext:'收益率期限结构曲线 ('+selectedDate.value+')',left:'center',textStyle:{fontFamily:'SimSun',fontSize:16,fontWeight:'bold'},subtextStyle:{fontFamily:'SimSun',fontSize:12,color:'#909399'}},
+tooltip:{trigger:'item',backgroundColor:'rgba(255,255,255,0.95)',borderColor:'#eee',borderWidth:1,textStyle:{fontFamily:'SimSun',color:'#333'},formatter:function(p){
+if(p.seriesName==='样本债券'){
+var b=bonds.find(function(x){return x.y===p.value[0]&&x.v===p.value[1]});
+return b?'<b>'+b.n+'</b><br/>代码: '+b.c+'<br/>期限: '+b.y.toFixed(2)+'年<br/>收益率: '+b.v.toFixed(2)+'%':'';
+}else{
+return'<b>拟合曲线</b><br/>期限: '+p.value[0].toFixed(1)+'年<br/>收益率: '+p.value[1].toFixed(2)+'%';
+}
+}},
+legend:{data:['样本债券','拟合曲线'],bottom:10,textStyle:{fontFamily:'SimSun',fontSize:12}},
+grid:{left:'10%',right:'5%',bottom:'15%',top:'18%'},
+xAxis:{type:'value',name:'剩余期限(年)',nameLocation:'middle',nameGap:30,nameTextStyle:{fontFamily:'SimSun',fontSize:12},min:0,max:10,interval:1,splitLine:{show:true,lineStyle:{type:'dashed',color:'#e0e0e0'}},axisLabel:{fontFamily:'SimSun',formatter:'{value}'},axisLine:{lineStyle:{color:'#A8A39D'}}},
+yAxis:{type:'value',name:'收益率(%)',nameLocation:'middle',nameGap:45,nameTextStyle:{fontFamily:'SimSun',fontSize:12},min:yAxisMin,max:yAxisMax,interval:0.25,splitLine:{show:true,lineStyle:{type:'dashed',color:'#e0e0e0'}},axisLabel:{fontFamily:'SimSun',formatter:'{value}%'},axisLine:{lineStyle:{color:'#A8A39D'}}},
+series:[
+{name:'样本债券',type:'scatter',data:scatterData,symbolSize:14,itemStyle:{color:'#7A9E9F',borderColor:'#fff',borderWidth:2},label:{show:true,formatter:function(p){var b=bonds.find(function(x){return x.y===p.value[0]&&x.v===p.value[1]});return b?b.n.substring(0,6):''},position:'top',fontFamily:'SimSun',fontSize:10,color:'#606266',distance:8}},
+{name:'拟合曲线',type:'line',data:curveData,smooth:true,symbol:'none',lineStyle:{width:3,color:'#C9A193'},areaStyle:{color:'rgba(201,161,147,0.12)'}}
+]
+};
+chart.setOption(option,true);
+}catch(e){console.error('图表渲染错误:',e)}
+}
+
+function interpolateYield(bonds,targetTenor){
+if(!bonds||bonds.length<2)return null;
+var before=null,after=null;
+for(var i=0;i<bonds.length;i++){
+if(bonds[i].y<=targetTenor)before=bonds[i];
+if(bonds[i].y>=targetTenor&&after===null)after=bonds[i];
+}
+if(before&&after&&before.y!==after.y){
+var ratio=(targetTenor-before.y)/(after.y-before.y);
+return before.v+ratio*(after.v-before.v);
+}
+if(before)return before.v;
+if(after)return after.v;
+return null;
+}
+
+return{
+selectedDate:selectedDate,
+bondType:bondType,
+kw:kw,
+result:result,
+loading:loading,
+searched:searched,
+dates:dates,
+normalCount:normalCount,
+perpetualCount:perpetualCount,
+sortedBonds:sortedBonds,
+search:search,
+clear:clear,
+showSuggestions:showSuggestions,
+suggestions:suggestions,
+onInput:onInput,
+selectIssuer:selectIssuer,
+hideSuggestions:hideSuggestions
+};
+}
+}).mount('#app');
+</script>
+</body>
+</html>

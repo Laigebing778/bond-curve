@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>期限结构曲线查询</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/element-plus"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f7fa; min-height: 100vh; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; }
+        .header h1 { font-size: 24px; margin-bottom: 5px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .search-box { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+        .chart-box { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
+        .info-card { background: #f8f9fa; border-radius: 8px; padding: 15px; margin-top: 20px; }
+        .info-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .info-label { color: #666; }
+        .info-value { font-weight: bold; color: #333; }
+        .positive { color: #67c23a; }
+        .negative { color: #f56c6c; }
+        .el-select-dropdown__item { height: auto; padding: 8px 20px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>收益率期限结构曲线查询</h1>
+            <p>数据日期: {{ selectedDate }} | 债券类型: {{ bondType === 'normal' ? '普通债' : '永续债' }}</p>
+        </div>
+
+        <div class="container">
+            <div class="search-box">
+                <el-row :gutter="20" align="middle">
+                    <el-col :span="4">
+                        <el-select v-model="selectedDate" placeholder="选择日期" style="width: 100%" @change="loadIssuerList">
+                            <el-option v-for="d in availableDates" :key="d" :label="d" :value="d"></el-option>
+                        </el-select>
+                    </el-col>
+                    <el-col :span="4">
+                        <el-radio-group v-model="bondType" @change="onBondTypeChange">
+                            <el-radio-button value="normal">普通债</el-radio-button>
+                            <el-radio-button value="perpetual">永续债</el-radio-button>
+                        </el-radio-group>
+                    </el-col>
+                    <el-col :span="12">
+                        <el-autocomplete v-model="searchText" :fetch-suggestions="querySearch"
+                            placeholder="输入发行人名称搜索" style="width: 100%" @select="onSelectIssuer"
+                            :debounce="300" clearable>
+                            <template #default="{ item }">
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>{{ item.issuer_name }}</span>
+                                    <span style="color: #999; font-size: 12px;">{{ item.bond_count }}只债券</span>
+                                </div>
+                            </template>
+                        </el-autocomplete>
+                    </el-col>
+                    <el-col :span="4">
+                        <el-button type="primary" @click="loadChartData" :loading="chartLoading" :disabled="!selectedIssuer">
+                            查询曲线
+                        </el-button>
+                    </el-col>
+                </el-row>
+            </div>
+
+            <div v-if="loading" style="text-align: center; padding: 50px;">
+                <el-icon class="is-loading" :size="40"><loading /></el-icon>
+                <p style="margin-top: 10px; color: #666;">加载中...</p>
+            </div>
+
+            <div class="chart-box" v-if="chartData && !loading">
+                <div id="yieldChart" style="width: 100%; height: 500px;"></div>
+
+                <div class="info-card">
+                    <el-row :gutter="20">
+                        <el-col :span="12">
+                            <h4 style="margin-bottom: 10px;">曲线信息</h4>
+                            <div class="info-row">
+                                <span class="info-label">发行人</span>
+                                <span class="info-value">{{ chartData.issuer_name }}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">债券类型</span>
+                                <span class="info-value">{{ chartData.bond_type }}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">拟合模型</span>
+                                <span class="info-value">{{ chartData.model_type }}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">样本数量</span>
+                                <span class="info-value">{{ chartData.bond_count }} 只</span>
+                            </div>
+                        </el-col>
+                        <el-col :span="12">
+                            <h4 style="margin-bottom: 10px;">拟合结果</h4>
+                            <div class="info-row">
+                                <span class="info-label">拟合优度 R²</span>
+                                <span class="info-value">{{ (chartData.r_squared * 100).toFixed(1) }}%</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">整体斜率</span>
+                                <span class="info-value" :class="chartData.slope_total >= 0 ? 'positive' : 'negative'">
+                                    {{ chartData.slope_total.toFixed(1) }} bp
+                                </span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">期限范围</span>
+                                <span class="info-value" v-if="chartData.tenor_min && chartData.tenor_max">
+                                    {{ chartData.tenor_min.toFixed(2) }} - {{ chartData.tenor_max.toFixed(2) }} 年
+                                </span>
+                                <span class="info-value" v-else>-</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">曲线形态</span>
+                                <span class="info-value" :class="chartData.slope_total >= 0 ? 'positive' : 'negative'">
+                                    {{ chartData.slope_total >= 0 ? '上行曲线' : '下行曲线' }}
+                                </span>
+                            </div>
+                        </el-col>
+                    </el-row>
+                </div>
+
+                <div class="info-card" style="margin-top: 15px;">
+                    <h4 style="margin-bottom: 10px;">样本债券明细 ({{ chartData.bonds ? chartData.bonds.length : 0 }}只)</h4>
+                    <el-table :data="chartData.bonds" stripe size="small" max-height="300" v-if="chartData.bonds && chartData.bonds.length">
+                        <el-table-column prop="bond_name" label="债券简称" min-width="150"></el-table-column>
+                        <el-table-column prop="bond_code" label="债券代码" width="120"></el-table-column>
+                        <el-table-column prop="remain_years" label="剩余期限(年)" width="120" sortable>
+                            <template #default="scope">{{ scope.row.remain_years.toFixed(2) }}</template>
+                        </el-table-column>
+                        <el-table-column prop="ytm" label="收益率(%)" width="100" sortable>
+                            <template #default="scope">{{ scope.row.ytm.toFixed(2) }}%</template>
+                        </el-table-column>
+                    </el-table>
+                    <el-empty v-else description="暂无债券数据"></el-empty>
+                </div>
+            </div>
+
+            <el-empty v-if="!chartData && !loading && searched" description="未找到该发行人数据"></el-empty>
+            <el-empty v-if="!chartData && !loading && !searched" description="请选择发行人查看期限结构曲线"></el-empty>
+        </div>
+    </div>
+
+    <script>
+    const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
+    const { ElMessage } = ElementPlus;
+
+    // API基础路径
+    const API_BASE = window.location.origin;
+
+    createApp({
+        setup() {
+            const selectedDate = ref('2026-03-06');
+            const selectedIssuer = ref(null);
+            const bondType = ref('normal');
+            const availableDates = ref([]);
+            const allIssuers = ref({ normal: [], perpetual: [] });
+            const chartData = ref(null);
+            const chartLoading = ref(false);
+            const loading = ref(false);
+            const searchText = ref('');
+            const searched = ref(false);
+            let chart = null;
+
+            const loadAvailableDates = async () => {
+                try {
+                    const res = await axios.get(`${API_BASE}/api/dates`);
+                    availableDates.value = res.data.dates || [];
+                    if (availableDates.value.length > 0) {
+                        selectedDate.value = availableDates.value[0];
+                        await loadIssuerList();
+                    }
+                } catch (e) {
+                    console.error('加载日期失败', e);
+                }
+            };
+
+            const loadIssuerList = async () => {
+                if (!selectedDate.value) return;
+                loading.value = true;
+                try {
+                    const res = await axios.get(`${API_BASE}/api/analysis/${selectedDate.value}`);
+                    allIssuers.value = {
+                        normal: res.data.normal || [],
+                        perpetual: res.data.perpetual || []
+                    };
+                    console.log(`加载完成: 普通债${allIssuers.value.normal.length}个, 永续债${allIssuers.value.perpetual.length}个`);
+                } catch (e) {
+                    console.error('加载数据失败', e);
+                    ElMessage.error('加载数据失败');
+                } finally {
+                    loading.value = false;
+                }
+            };
+
+            const querySearch = (queryString, cb) => {
+                const list = allIssuers.value[bondType.value] || [];
+                const results = queryString
+                    ? list.filter(item => item.issuer_name.includes(queryString)).slice(0, 20)
+                    : list.slice(0, 20);
+                cb(results);
+            };
+
+            const onSelectIssuer = (item) => {
+                selectedIssuer.value = item.issuer_name;
+                searchText.value = item.issuer_name;
+            };
+
+            const onBondTypeChange = () => {
+                selectedIssuer.value = null;
+                searchText.value = '';
+                chartData.value = null;
+                searched.value = false;
+            };
+
+            const loadChartData = async () => {
+                if (!searchText.value) {
+                    ElMessage.warning('请输入发行人名称');
+                    return;
+                }
+                chartLoading.value = true;
+                searched.value = true;
+                try {
+                    const res = await axios.get(`${API_BASE}/api/analysis/${selectedDate.value}`);
+                    const list = bondType.value === 'normal' ? res.data.normal : res.data.perpetual;
+
+                    // 模糊匹配
+                    const found = list.filter(item => item.issuer_name.includes(searchText.value));
+
+                    if (found.length > 0) {
+                        chartData.value = found[0];
+                        selectedIssuer.value = found[0].issuer_name;
+                        await nextTick();
+                        renderChart();
+                    } else {
+                        chartData.value = null;
+                        ElMessage.warning('未找到该发行人数据');
+                    }
+                } catch (e) {
+                    console.error('加载失败', e);
+                    ElMessage.error('加载失败');
+                } finally {
+                    chartLoading.value = false;
+                }
+            };
+
+            const renderChart = () => {
+                if (!chart) {
+                    chart = echarts.init(document.getElementById('yieldChart'));
+                }
+
+                const bonds = chartData.value.bonds || [];
+                if (bonds.length === 0) {
+                    ElMessage.warning('该发行人无有效债券数据');
+                    return;
+                }
+
+                // 按期限排序
+                const sortedBonds = [...bonds].sort((a, b) => a.remain_years - b.remain_years);
+
+                // 数据点
+                const scatterData = sortedBonds.map(b => ({
+                    value: [b.remain_years, b.ytm],
+                    name: b.bond_name,
+                    bond: b
+                }));
+
+                // 计算数据范围
+                const tenors = sortedBonds.map(b => b.remain_years);
+                const yields = sortedBonds.map(b => b.ytm);
+                const xMin = Math.min(...tenors);
+                const xMax = Math.max(...tenors);
+                const yMin = Math.min(...yields);
+                const yMax = Math.max(...yields);
+
+                const option = {
+                    title: {
+                        text: chartData.value.issuer_name,
+                        subtext: `收益率期限结构曲线 (${selectedDate.value})`,
+                        left: 'center'
+                    },
+                    tooltip: {
+                        trigger: 'item',
+                        formatter: function(params) {
+                            const bond = params.data.bond;
+                            return `<b>${bond.bond_name}</b><br/>
+                                    代码: ${bond.bond_code}<br/>
+                                    期限: ${bond.remain_years.toFixed(2)}年<br/>
+                                    收益率: ${bond.ytm.toFixed(2)}%`;
+                        }
+                    },
+                    grid: {
+                        left: '8%',
+                        right: '8%',
+                        bottom: '12%',
+                        top: '18%'
+                    },
+                    xAxis: {
+                        type: 'value',
+                        name: '剩余期限(年)',
+                        nameLocation: 'middle',
+                        nameGap: 30,
+                        min: 0,
+                        max: Math.max(15, Math.ceil(xMax + 1))
+                    },
+                    yAxis: {
+                        type: 'value',
+                        name: '收益率(%)',
+                        nameLocation: 'middle',
+                        nameGap: 45,
+                        min: function(value) { return (value.min - 0.2).toFixed(2); },
+                        max: function(value) { return (value.max + 0.2).toFixed(2); }
+                    },
+                    series: [{
+                        name: '债券样本点',
+                        type: 'scatter',
+                        data: scatterData,
+                        symbolSize: 15,
+                        itemStyle: {
+                            color: '#5470c6',
+                            borderColor: '#fff',
+                            borderWidth: 2
+                        },
+                        label: {
+                            show: true,
+                            formatter: function(params) {
+                                return params.data.bond.bond_name.substring(0, 8);
+                            },
+                            position: 'top',
+                            fontSize: 10,
+                            color: '#333'
+                        }
+                    }]
+                };
+
+                chart.setOption(option, true);
+            };
+
+            onMounted(() => {
+                loadAvailableDates();
+                window.addEventListener('resize', () => {
+                    if (chart) chart.resize();
+                });
+            });
+
+            return {
+                selectedDate, selectedIssuer, bondType, availableDates, allIssuers,
+                chartData, chartLoading, loading, searchText, searched,
+                loadAvailableDates, loadIssuerList, querySearch, onSelectIssuer,
+                onBondTypeChange, loadChartData
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+    </script>
+</body>
+</html>
