@@ -168,7 +168,7 @@ html_template = '''<!DOCTYPE html>
     <script>
     const ALL_DATA = __DATA_PLACEHOLDER__;
 
-    const { createApp, ref, computed, onMounted, nextTick } = Vue;
+    const { createApp, ref, computed, onMounted, nextTick, watch } = Vue;
     const { ElMessage } = ElementPlus;
 
     createApp({
@@ -183,6 +183,16 @@ html_template = '''<!DOCTYPE html>
 
             const currentData = computed(() => ALL_DATA[selectedDate.value] || { normal: [], perpetual: [] });
 
+            // 切换日期或债券类型时，清空搜索结果
+            watch([selectedDate, bondType], () => {
+                searchText.value = '';
+                chartData.value = null;
+                if (chart) {
+                    chart.clear();
+                    chart = null;
+                }
+            });
+
             const querySearch = (queryString, cb) => {
                 const list = currentData.value[bondType.value] || [];
                 const results = queryString ? list.filter(item => item.issuer_name.includes(queryString)).slice(0, 30) : list.slice(0, 30);
@@ -194,7 +204,10 @@ html_template = '''<!DOCTYPE html>
             const clearSearch = () => {
                 searchText.value = '';
                 chartData.value = null;
-                if (chart) chart.clear();
+                if (chart) {
+                    chart.clear();
+                    chart = null;
+                }
             };
 
             const loadChartData = async () => {
@@ -209,26 +222,42 @@ html_template = '''<!DOCTYPE html>
                         renderChart();
                     } else {
                         chartData.value = null;
-                        ElMessage.warning('未找到该发行人');
+                        ElMessage.warning('未找到该发行人的' + (bondType.value === 'perpetual' ? '永续债' : '普通债') + '数据');
                     }
+                } catch (e) {
+                    console.error('加载图表失败:', e);
+                    ElMessage.error('加载图表失败');
                 } finally { chartLoading.value = false; }
             };
 
             const renderChart = () => {
-                if (!chart) chart = echarts.init(document.getElementById('yieldChart'));
-                const bonds = chartData.value.bonds || [];
-                if (bonds.length === 0) { ElMessage.warning('无债券数据'); return; }
-                const sortedBonds = [...bonds].sort((a, b) => a.remain_years - b.remain_years);
-                const scatterData = sortedBonds.map(b => ({ value: [b.remain_years, b.ytm], bond: b }));
-                const xMax = Math.max(...sortedBonds.map(b => b.remain_years));
-                chart.setOption({
-                    title: { text: chartData.value.issuer_name, subtext: '期限结构曲线', left: 'center', textStyle: { fontSize: 14 } },
-                    tooltip: { trigger: 'item', formatter: p => '<b>' + p.data.bond.bond_name + '</b><br/>期限: ' + p.data.bond.remain_years.toFixed(2) + '年<br/>收益率: ' + p.data.bond.ytm.toFixed(2) + '%' },
-                    grid: { left: '8%', right: '5%', bottom: '12%', top: '18%' },
-                    xAxis: { type: 'value', name: '期限(年)', nameLocation: 'middle', nameGap: 25, min: 0, max: Math.max(15, Math.ceil(xMax + 1)) },
-                    yAxis: { type: 'value', name: '收益率(%)', nameLocation: 'middle', nameGap: 40 },
-                    series: [{ type: 'scatter', data: scatterData, symbolSize: 12, itemStyle: { color: '#5470c6' }, label: { show: true, formatter: p => p.data.bond.bond_name.substring(0, 6), position: 'top', fontSize: 9, color: '#333' } }]
-                }, true);
+                try {
+                    const chartDom = document.getElementById('yieldChart');
+                    if (!chartDom) {
+                        console.error('找不到图表容器');
+                        return;
+                    }
+                    if (!chart) chart = echarts.init(chartDom);
+                    const bonds = chartData.value.bonds || [];
+                    if (bonds.length === 0) {
+                        ElMessage.warning('该发行人无债券数据');
+                        return;
+                    }
+                    const sortedBonds = [...bonds].sort((a, b) => a.remain_years - b.remain_years);
+                    const scatterData = sortedBonds.map(b => ({ value: [b.remain_years, b.ytm], bond: b }));
+                    const xMax = Math.max(...sortedBonds.map(b => b.remain_years));
+                    chart.setOption({
+                        title: { text: chartData.value.issuer_name, subtext: bondType.value === 'perpetual' ? '永续债期限结构' : '普通债期限结构', left: 'center', textStyle: { fontSize: 14 } },
+                        tooltip: { trigger: 'item', formatter: p => '<b>' + p.data.bond.bond_name + '</b><br/>期限: ' + p.data.bond.remain_years.toFixed(2) + '年<br/>收益率: ' + p.data.bond.ytm.toFixed(2) + '%' },
+                        grid: { left: '8%', right: '5%', bottom: '12%', top: '18%' },
+                        xAxis: { type: 'value', name: '期限(年)', nameLocation: 'middle', nameGap: 25, min: 0, max: Math.max(15, Math.ceil(xMax + 1)) },
+                        yAxis: { type: 'value', name: '收益率(%)', nameLocation: 'middle', nameGap: 40 },
+                        series: [{ type: 'scatter', data: scatterData, symbolSize: 12, itemStyle: { color: bondType.value === 'perpetual' ? '#e6a23c' : '#5470c6' }, label: { show: true, formatter: p => p.data.bond.bond_name.substring(0, 6), position: 'top', fontSize: 9, color: '#333' } }]
+                    }, true);
+                } catch (e) {
+                    console.error('渲染图表失败:', e);
+                    ElMessage.error('渲染图表失败');
+                }
             };
 
             const exportExcel = () => {
