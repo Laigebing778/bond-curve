@@ -14,6 +14,7 @@ data_files = [
     'data/2026-3-18.json',
     'data/2026-3-19.json',
     'data/2026-3-20.json',
+    'data/2026-3-23.json',
 ]
 
 print("加载数据文件...")

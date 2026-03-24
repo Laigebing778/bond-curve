@@ -49,7 +49,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # 项目路径配置
-INPUT_FILE = r"C:\Users\Emma\桌面\存续信用债0306.xlsx"
+INPUT_FILE = r"C:\Users\Emma\桌面\存续信用债0322.xlsx"
 
 
 # ==================== 债券筛选配置 ====================
@@ -654,6 +654,20 @@ class DataProcessor:
         logger.info(f"拟合完成: 普通债 {len(results['normal'])} 个发行人, 永续债 {len(results['perpetual'])} 个发行人")
         return results
 
+    def _generate_date_range(self, start_date: str, end_date: str) -> List[str]:
+        """生成日期范围（仅工作日）"""
+        from datetime import datetime, timedelta
+        dates = []
+        start = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        current = start
+        while current <= end:
+            # 跳过周末
+            if current.weekday() < 5:
+                dates.append(current.strftime("%Y-%m-%d"))
+            current += timedelta(days=1)
+        return dates
+
     def process_date_range(self, start_date: str, end_date: str, incremental: bool = True) -> List[Dict]:
         """
         处理日期范围
@@ -665,8 +679,12 @@ class DataProcessor:
         """
         trading_days = self.fetcher.get_trading_days(start_date, end_date)
         if not trading_days:
-            logger.error("获取交易日失败")
-            return []
+            # 如果API获取交易日失败，直接使用用户指定的日期
+            logger.warning("获取交易日失败，直接使用指定日期范围")
+            trading_days = [start_date] if start_date == end_date else self._generate_date_range(start_date, end_date)
+            if not trading_days:
+                logger.error("日期范围处理失败")
+                return []
 
         # 增量更新：过滤已处理的日期
         if incremental:
